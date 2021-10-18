@@ -1,0 +1,2 @@
+#!/bin/sh
+/usr/local/bin/myweb $1 $2 2>> /home/sysadmin/mdi_git/myweb_latest/log/error.log

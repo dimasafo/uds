@@ -1,0 +1,9 @@
+service http
+{
+       socket_type             = stream
+       wait                    = no
+       user                    = root
+       server                  = /usr/local/bin/myweb-wrap 
+       server_args	       = /home/sysadmin/mdi_git/myweb_latest/webroot /home/sysadmin/mdi_git/myweb_latest/log
+}
+
