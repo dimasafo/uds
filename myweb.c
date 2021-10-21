@@ -33,6 +33,18 @@ struct http_req {
 	// accept
 };
 
+void fill_uri_path_by_uri(struct http_req* req)
+{
+	strncpy(req->uri_path, req->uri, strlen(req->uri));
+	
+	for(size_t idx = 0; idx < strlen(req->uri_path); ++idx)
+	{
+		if ((req->uri)[idx] == '?')
+			(req->uri)[idx] = '\0';
+			break;
+	}
+}
+
 void getCurrentTime(char* buf)
 {
 	buf[0]='\0';
@@ -76,7 +88,8 @@ int fill_req(char *buf, struct http_req *req) {
 			if ( b != NULL ) { // конец URI
 				strncpy(req->uri, a, b-a);
 				// пусть пока URI_PATH - то же, что и URI
-				strncpy(req->uri_path, a, b-a);
+				//strncpy(req->uri_path, a, b-a);
+				fill_uri_path_by_uri(req);
 			} else {
 				return ERR_ENDLESS_URI;  
 				// тогда это что-то не то
@@ -90,8 +103,11 @@ int fill_req(char *buf, struct http_req *req) {
 	return 0;	
 }
 
-int log_req(char* log_path, struct http_req *req) {
-	return log_str(log_path, "Sample Log Entry");
+int log_req(char* log_path, struct http_req* req) {
+	char buf[5000];
+	sprintf(buf, "\nParsed request: request=%s, method=%s, uri=%s, uri_path=%s\n", req->request, req->method, req->uri, req->uri_path);
+	
+	return log_str(log_path, buf);
 }
 
 int log_str(char* log_path, const char* str) {
@@ -106,8 +122,15 @@ int log_str(char* log_path, const char* str) {
 		return 1;
 	}
         write(fd, "\n", 1);
-        fsync(fd);
+        fsync(fd);	
+	
         close(fd);
+	
+	char mode[] = "0777";
+	int int_filemod = strtol(mode, 0, 8);
+
+	chmod(log_path, int_filemod);
+	
         return 0;
 }
 
@@ -154,12 +177,24 @@ int make_resp(char *base_path, struct http_req *req) {
 	return 0;
 }
 
+void debug_log(int stream_id, const char* name, const char* str)
+{
+	write(stream_id,"\n\n-->",strlen("\n\n-->")); 
+	if (name)
+	{
+		write(stream_id,name,strlen(name));
+		write(stream_id,"=",strlen("=")); 
+	}
+	write(stream_id,str,strlen(str)); 
+	write(stream_id,"<--\n\n",strlen("<--\n\n"));
+}
+
 int main (int argc, char* argv[]) {
 	// первый параметр - каталог с контентом
 	// второй параметр - каталог для ведения журнала
 	char base_path[FILE_NAME_LEN] = "";
 	char log_path[FILE_NAME_LEN] = "";
-	char const *log_file = "access.log";
+	char const* log_file = "access.log";
 	if ( argc > 2 ) { // задан каталог журнализации
 		strncpy(base_path, argv[1], strlen(argv[1]));
 		strncpy(log_path, argv[2], strlen(argv[2]));
@@ -168,14 +203,21 @@ int main (int argc, char* argv[]) {
 	}
 	else
 	{
-		strcat(log_path, "log/");
+		//strcat(log_path, "./log/");
 	}
+	
+	
 	strcat(log_path,log_file);
+	
+	//debug_log(1, "log_path", log_path);
+	//debug_log(1, "base_path", base_path);
+	
+	
 	char buf[HTTP_HEADER_LEN];
 	struct http_req req;
 	while(fgets(buf, sizeof(buf),stdin)) {
 
-		log_req(log_path, &req);
+		log_str(log_path, buf);
 
 		int ret = fill_req(buf, &req);
 		if (ret == 0) 
@@ -189,6 +231,8 @@ int main (int argc, char* argv[]) {
 			printf("Error: %d\n", ret);
 		
 	}
+	
 	log_req(log_path, &req);
+	
 	make_resp(base_path,&req);
 }

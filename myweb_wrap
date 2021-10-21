@@ -1,0 +1,2 @@
+#!/bin/sh
+/usr/local/bin/myweb $1 $2 2>> /usr/local/bin/myweb_folder/log/error.log

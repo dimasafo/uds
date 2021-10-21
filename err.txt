@@ -1,0 +1,26 @@
+cc -ggdb myweb.c -o myweb
+myweb.c:36:27: error: unknown type name ‘http_req’
+ void fill_uri_path_by_uri(http_req* req)
+                           ^~~~~~~~
+myweb.c: In function ‘addTimeBeforeStr’:
+myweb.c:57:17: warning: passing argument 1 of ‘getCurrentTime’ makes pointer from integer without a cast [-Wint-conversion]
+  getCurrentTime(*buf);
+                 ^~~~
+myweb.c:41:27: note: expected ‘char *’ but argument is of type ‘char’
+ void getCurrentTime(char* buf)
+                     ~~~~~~^~~
+myweb.c: In function ‘fill_req’:
+myweb.c:85:5: warning: implicit declaration of function ‘fill_uri_path_by_uri’ [-Wimplicit-function-declaration]
+     fill_uri_path_by_uri(req);
+     ^~~~~~~~~~~~~~~~~~~~
+myweb.c: In function ‘log_req’:
+myweb.c:103:9: warning: implicit declaration of function ‘log_str’; did you mean ‘log_req’? [-Wimplicit-function-declaration]
+  return log_str(log_path, buf);
+         ^~~~~~~
+         log_req
+myweb.c: In function ‘log_str’:
+myweb.c:123:20: warning: implicit declaration of function ‘strtol’; did you mean ‘strtok’? [-Wimplicit-function-declaration]
+  int int_filemod = strtol(mode, 0, 8);
+                    ^~~~~~
+                    strtok
+make: *** [Makefile:17: myweb] Ошибка 1
