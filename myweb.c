@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -15,11 +16,23 @@
 #define FILE_NAME_LEN 1000
 #define LOG_ENTRY_LEN 1000
 
+#define BIG_CHAR_BUFF_LEN 5000
+
 #define REQ_END 100
 #define ERR_NO_URI -100
 #define ERR_ENDLESS_URI -101
 
 char const *index_file = "index.html";
+
+char* getLogPath()
+{
+	static char log_path[FILE_NAME_LEN];
+	return log_path;
+}
+
+int log_fstr(const char* log_path, const char* format, ...);
+
+
 
 struct http_req {
 	char request[HTTP_REQUEST_LEN];
@@ -39,9 +52,11 @@ void fill_uri_path_by_uri(struct http_req* req)
 	
 	for(size_t idx = 0; idx < strlen(req->uri_path); ++idx)
 	{
-		if ((req->uri)[idx] == '?')
-			(req->uri)[idx] = '\0';
+		if ((req->uri_path)[idx] == '?')
+		{
+			(req->uri_path)[idx] = '\0';
 			break;
+		}
 	}
 }
 
@@ -104,9 +119,24 @@ int fill_req(char *buf, struct http_req *req) {
 }
 
 int log_req(char* log_path, struct http_req* req) {
-	char buf[5000];
+	char buf[BIG_CHAR_BUFF_LEN];
 	sprintf(buf, "\nParsed request: request=%s, method=%s, uri=%s, uri_path=%s\n", req->request, req->method, req->uri, req->uri_path);
 	
+	return log_str(log_path, buf);
+}
+
+
+
+int log_fstr(const char* log_path, const char* format, ...)
+{
+	char buf[BIG_CHAR_BUFF_LEN];
+
+	va_list args;
+
+	va_start(args, format);
+	vsprintf(buf, format, args);
+	va_end(args);
+
 	return log_str(log_path, buf);
 }
 
@@ -193,12 +223,17 @@ int main (int argc, char* argv[]) {
 	// первый параметр - каталог с контентом
 	// второй параметр - каталог для ведения журнала
 	char base_path[FILE_NAME_LEN] = "";
-	char log_path[FILE_NAME_LEN] = "";
+	//char log_path[FILE_NAME_LEN] = "";
 	char const* log_file = "access.log";
 	if ( argc > 2 ) { // задан каталог журнализации
 		strncpy(base_path, argv[1], strlen(argv[1]));
-		strncpy(log_path, argv[2], strlen(argv[2]));
-		strcat(log_path,"/");
+		//strncpy(log_path, argv[2], strlen(argv[2]));
+		
+		strncpy(getLogPath(), argv[2], strlen(argv[2]));
+		
+		//strcat(log_path,"/");
+		strcat(getLogPath(),"/");
+		
 		strcat(base_path,"/");
 	}
 	else
@@ -207,7 +242,8 @@ int main (int argc, char* argv[]) {
 	}
 	
 	
-	strcat(log_path,log_file);
+	//strcat(log_path,log_file);
+	strcat(getLogPath(),log_file);
 	
 	//debug_log(1, "log_path", log_path);
 	//debug_log(1, "base_path", base_path);
@@ -217,7 +253,7 @@ int main (int argc, char* argv[]) {
 	struct http_req req;
 	while(fgets(buf, sizeof(buf),stdin)) {
 
-		log_str(log_path, buf);
+		log_str(getLogPath(), buf);
 
 		int ret = fill_req(buf, &req);
 		if (ret == 0) 
@@ -232,7 +268,7 @@ int main (int argc, char* argv[]) {
 		
 	}
 	
-	log_req(log_path, &req);
+	log_req(getLogPath(), &req);
 	
 	make_resp(base_path,&req);
 }
