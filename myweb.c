@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <time.h>
+#include <pthread.h>
 
 
 #define HTTP_HEADER_LEN 256
@@ -22,12 +23,74 @@
 #define ERR_NO_URI -100
 #define ERR_ENDLESS_URI -101
 
-char const *index_file = "index.html";
+#define MAX_THREADS 3
 
 char* getLogPath()
 {
 	static char log_path[FILE_NAME_LEN];
 	return log_path;
+}
+
+char* getBasePath()
+{
+	static char base_path[FILE_NAME_LEN];
+	return base_path;
+}
+
+pthread_mutex_t lock;
+pthread_mutex_t lock_access_log;
+pthread_t threads[MAX_THREADS];
+pthread_t fastFinishedThread;
+
+int get_thread_id_index__unsafe(pthread_t id)
+{
+	for(int i = 0; i < MAX_THREADS; ++i)
+	{
+		if(threads[i] == id)
+			return i;
+	}
+	
+	return -1;
+}
+
+int add_thread_to_list__unsafe(pthread_t id)
+{
+	int idx = get_thread_id_index__unsafe(id);
+	
+	if (idx != -1)
+		return;
+		
+	for(int i = 0; i < MAX_THREADS; ++i)
+	{
+		if(threads[i] == 0)
+		{
+			threads[i] = id;
+			return 1;
+		}
+	}
+	
+	return 0;
+}
+
+int is_any_thread_in_list__unsafe()
+{
+	for(int i = 0; i < MAX_THREADS; ++i)
+	{
+		if(threads[i] != 0)
+		{
+			return 1;
+		}
+	}
+	
+	return 0;
+}
+
+void remove_thread_from_list__unsafe(pthread_t id)
+{
+	int idx = get_thread_id_index__unsafe(id);
+	
+	if (idx != -1)
+		threads[idx] = 0;
 }
 
 int log_fstr(const char* log_path, const char* format, ...);
@@ -60,28 +123,10 @@ void fill_uri_path_by_uri(struct http_req* req)
 	}
 }
 
-void getCurrentTime(char* buf)
+int fill_req(char *buf, struct http_req *req) 
 {
-	buf[0]='\0';
+	log_fstr(getLogPath(), " len=%i ", strlen(buf));
 
-	time_t rawtime;
-	struct tm * timeinfo;
-
-	time ( &rawtime );
-	timeinfo = localtime ( &rawtime );
-	sprintf(buf, "t=%s", asctime (timeinfo) );
-}
-
-char* addTimeBeforeStr(char* str, size_t len)
-{
-	const size_t BUF_LEN = 255;
-	char buf[BUF_LEN];
-	getCurrentTime(*buf);
-
-	
-}
-
-int fill_req(char *buf, struct http_req *req) {
 	if (strlen(buf) == 2) {
 		// пустая строка (\r\n) означает конец запроса
 		return REQ_END;
@@ -114,16 +159,16 @@ int fill_req(char *buf, struct http_req *req) {
 			// тогда это что-то не то
 		}
 	}
+	
+	p = strstr(buf, "exit"); //exit marker
+	if (p == buf) {
+		strncpy(req->uri_path, "exit", strlen("exit"));
+		return REQ_END;
+	}
 
 	return 0;	
 }
 
-int log_req(char* log_path, struct http_req* req) {
-	char buf[BIG_CHAR_BUFF_LEN];
-	sprintf(buf, "\nParsed request: request=%s, method=%s, uri=%s, uri_path=%s\n", req->request, req->method, req->uri, req->uri_path);
-	
-	return log_str(log_path, buf);
-}
 
 
 
@@ -143,12 +188,18 @@ int log_fstr(const char* log_path, const char* format, ...)
 int log_str(char* log_path, const char* str) {
 	int fd;
 	
+	//return 0;
+	
+	pthread_mutex_lock(&lock_access_log);
+
 	if ((fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0600)) < 0) {
 		perror(log_path);
+		pthread_mutex_unlock(&lock_access_log);
 		return 1;
 	}
 	if (write(fd, str, strlen(str)) != strlen(str)) {
 		perror(log_path);
+		pthread_mutex_unlock(&lock_access_log);
 		return 1;
 	}
         write(fd, "\n", 1);
@@ -161,19 +212,69 @@ int log_str(char* log_path, const char* str) {
 
 	chmod(log_path, int_filemod);
 	
+	pthread_mutex_unlock(&lock_access_log);
+	
         return 0;
 }
 
-int make_resp(char *base_path, struct http_req *req) {
+void get_filepath_by_req(char* res_file, struct http_req* req)
+{
+	// определяем на основе запроса, что за файл открыть
+	char const *index_file = "index.html";
+	
+	if (strcmp(req->uri_path, "/")==0)
+	{
+		strcat(res_file, index_file);
+	}
+	else
+	{
+		if(strlen(req->uri_path) > 0)
+		{
+			char* uri_path_minus_one = &((req->uri_path)[1]); //we skip first symbol '/' e.g. "/page1.html"
+			strcat(res_file, uri_path_minus_one); 
+		}
+	}
+}
+
+void write_http_ok()
+{
+	char* http_result = "HTTP/1.1 200 OK\r\n";
+	write(1,http_result,strlen(http_result));
+	
+	char* http_contype = "Content-Type: text/html\r\n";
+	write(1,http_contype,strlen(http_contype));
+	
+	char* header_end = "\r\n";
+	write(1,header_end,strlen(header_end));
+}
+
+void write_http_nosuchfile()
+{
+	char* http_result = "HTTP/1.1 404 Not Found\r\n";
+	write(1,http_result,strlen(http_result));
+	
+	char* header_end = "\r\n";
+	write(1,header_end,strlen(header_end));
+}
+
+int make_resp(struct http_req* req) 
+{
         int fdin;
         struct stat statbuf;
-        void *mmf_ptr;
-	// определяем на основе запроса, что за файл открыть
+        void* mmf_ptr;
+	
+	unsigned long pid = (unsigned long)getpid();
+	
+	
 	char res_file[FILE_NAME_LEN] = "";
-	if (base_path != NULL) {
-		strncpy(res_file,base_path,strlen(base_path));
+	if (getBasePath() != NULL && strlen(getBasePath()) > 0) {
+		strncpy(res_file,getBasePath(),strlen(getBasePath()));
 	}
-	strcat(res_file,index_file); // вот сюда писать отображение запроса в файловые пути 
+	
+	get_filepath_by_req(res_file, req);
+	
+	log_fstr(getLogPath(), " \n(pid=%lu) res_file=%s\n ", pid, res_file);
+	
 	// открываем
         if ((fdin=open(res_file, O_RDONLY)) < 0) {
                 perror(res_file);
@@ -189,13 +290,9 @@ int make_resp(char *base_path, struct http_req *req) {
                 perror("myfile");
                 return 1;
         }
-	// Выводим HTTP-заголовки
-	char *http_result = "HTTP/1.1 200 OK\r\n";
-	write(1,http_result,strlen(http_result));
-	char *http_contype = "Content-Type: text/html\r\n";
-	write(1,http_contype,strlen(http_contype));
-	char *header_end = "\r\n";
-	write(1,header_end,strlen(header_end));
+	
+	write_http_ok();
+	
 	// Выводим запрошенный ресурс
         if (write(1,mmf_ptr,statbuf.st_size) != statbuf.st_size) {
                 perror("stdout");
@@ -207,68 +304,241 @@ int make_resp(char *base_path, struct http_req *req) {
 	return 0;
 }
 
-void debug_log(int stream_id, const char* name, const char* str)
+void prepare_paths(int argc, char* argv[])
 {
-	write(stream_id,"\n\n-->",strlen("\n\n-->")); 
-	if (name)
-	{
-		write(stream_id,name,strlen(name));
-		write(stream_id,"=",strlen("=")); 
-	}
-	write(stream_id,str,strlen(str)); 
-	write(stream_id,"<--\n\n",strlen("<--\n\n"));
-}
+	getBasePath()[0]='\0';
+	getLogPath()[0]='\0';
 
-int main (int argc, char* argv[]) {
-	// первый параметр - каталог с контентом
-	// второй параметр - каталог для ведения журнала
-	char base_path[FILE_NAME_LEN] = "";
-	//char log_path[FILE_NAME_LEN] = "";
 	char const* log_file = "access.log";
 	if ( argc > 2 ) { // задан каталог журнализации
-		strncpy(base_path, argv[1], strlen(argv[1]));
-		//strncpy(log_path, argv[2], strlen(argv[2]));
-		
+		strncpy(getBasePath(), argv[1], strlen(argv[1]));
 		strncpy(getLogPath(), argv[2], strlen(argv[2]));
 		
-		//strcat(log_path,"/");
-		strcat(getLogPath(),"/");
-		
-		strcat(base_path,"/");
+		strcat(getLogPath(),"/");	
+		strcat(getBasePath(),"/");
 	}
 	else
 	{
 		//strcat(log_path, "./log/");
 	}
 	
-	
-	//strcat(log_path,log_file);
 	strcat(getLogPath(),log_file);
-	
-	//debug_log(1, "log_path", log_path);
-	//debug_log(1, "base_path", base_path);
-	
-	
-	char buf[HTTP_HEADER_LEN];
-	struct http_req req;
-	while(fgets(buf, sizeof(buf),stdin)) {
+}
 
-		log_str(getLogPath(), buf);
+int can_read()
+{
+	fd_set readfds;
+	FD_ZERO(&readfds);
+	FD_SET(STDIN_FILENO, &readfds);
+	fd_set savefds = readfds;
 
-		int ret = fill_req(buf, &req);
-		if (ret == 0) 
-			// строка запроса обработана, переходим к следующей
-			continue;
-		if (ret == REQ_END ) 
-			// конец HTTP запроса, вываливаемся на обработку
-			break;
-		else
-			// какая-то ошибка 
-			printf("Error: %d\n", ret);
-		
+	struct timeval timeout;
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 0;
+
+	int chr;
+
+	int sel_rv = select(1, &readfds, NULL, NULL, &timeout);
+	
+	if (sel_rv == -1) {
+		return 0;
 	}
 	
-	log_req(getLogPath(), &req);
+	return 1;
+}
+
+struct resp_thread_params
+{
+	struct http_req* req;
+};
+
+void thread_cleanup_handler(void *arg)
+{
+	pthread_t thread_id = pthread_self();
 	
-	make_resp(base_path,&req);
+	pthread_mutex_lock(&lock);
+		remove_thread_from_list__unsafe(thread_id);
+		fastFinishedThread = thread_id;
+	pthread_mutex_unlock(&lock);
+}
+
+void* make_resp_thread_func(void* arg)
+{
+	struct resp_thread_params* params = (struct resp_thread_params*)arg;
+	
+	pthread_cleanup_push(thread_cleanup_handler, NULL);
+	
+	struct http_req req_local;
+	memcpy(&req_local, params->req, sizeof(struct http_req));
+
+	{ //registering the thread. we cant continue without proper thread registration
+		pthread_mutex_lock(&lock);
+		int add_res = add_thread_to_list__unsafe(pthread_self());
+		pthread_mutex_unlock(&lock);
+	
+		while(add_res != 1) //we fill all MAX_THREADS lets wait for finish for someone
+		{
+			log_fstr(getLogPath(), "\ntoo many threads. waiting\n");
+			pthread_mutex_lock(&lock);
+			add_res = add_thread_to_list__unsafe(pthread_self());
+			pthread_mutex_unlock(&lock);
+		}
+	}
+
+	int resp_flag = make_resp(&req_local);
+		
+	if (resp_flag == 0)
+	{
+		//write_http_nosuchfile();
+	}
+	
+	
+	
+	//sleep(30); //for debug reasons. if we handle req a long time
+	
+	
+	
+	pthread_cleanup_pop(1);
+	
+	thread_cleanup_handler(NULL);
+	
+	return NULL;
+}
+
+void do_resp_async(struct http_req* req)
+{
+	struct resp_thread_params thread_params;
+	thread_params.req = req;
+	pthread_t thread_id;
+	
+	{
+		pthread_mutex_lock(&lock);
+			fastFinishedThread = 0;
+		pthread_mutex_unlock(&lock);
+	}
+	
+	pthread_create(&thread_id, NULL, &make_resp_thread_func, &thread_params); 
+	
+	while(1) //waiting for thread is proper registered
+	{
+		//write(1,"111",3);
+		pthread_mutex_lock(&lock);
+			int thread_index = get_thread_id_index__unsafe(thread_id);
+			pthread_t fashFinishedCopy = fastFinishedThread;	
+		pthread_mutex_unlock(&lock);
+		
+		if(thread_index != -1)
+			break;
+			
+		if(fashFinishedCopy == thread_id)
+			break; //in case of when a new thread is finished before this while(1) cycle
+	}
+	
+	{
+		pthread_mutex_lock(&lock);
+			fastFinishedThread = 0;
+		pthread_mutex_unlock(&lock);
+	}
+	
+	//and resume it only here somehow
+		
+	pthread_detach(thread_id);
+	//pthread_join(thread_id, NULL);
+	
+	//int resp_flag = make_resp(req);	
+	//if (resp_flag == 0)
+	//{
+		//write_http_nosuchfile();
+	//}
+}
+
+int main (int argc, char* argv[]) 
+{
+	//getBasePath() //каталог с контентом
+	//getLogPath() - каталог для ведения журнала
+
+	memset(&threads, 0, sizeof(pthread_t)*MAX_THREADS);
+	
+	if (pthread_mutex_init(&lock, NULL) != 0) 
+	{
+		const char* str = "mutex init has failed";
+		write(2,str,strlen(str));
+		return 1;
+	}
+	
+	if (pthread_mutex_init(&lock_access_log, NULL) != 0) 
+	{
+		const char* str = "mutex init has failed";
+		write(2,str,strlen(str));
+		return 1;
+	}
+
+	prepare_paths(argc, argv);
+	
+	unsigned long pid = (unsigned long)getpid();
+	
+	log_fstr(getLogPath(), " \nSTARTING (pid=%lu)\n ", pid);
+	
+	log_fstr(getLogPath(), " log_path=%s ", getLogPath());	//expected: /usr/local/bin/myweb_folder/log/access.log 
+	log_fstr(getLogPath(), " base_path=%s ", getBasePath());	//expected: /usr/local/bin/myweb_folder/webroot/ 
+	
+	while(1)
+	{
+		if(can_read() == 1)
+		{
+			log_fstr(getLogPath(), "\n---the request itself (pid=%lu):-----------\n", pid);
+	
+			char buf[HTTP_HEADER_LEN];
+			memset(buf, 0, sizeof(buf));
+	
+			struct http_req req;
+			memset(&req, 0, sizeof(struct http_req));
+			
+			int line_num = 0;
+			while(fgets(buf, sizeof(buf), stdin)) 
+			{
+				log_fstr(getLogPath(), "\n444\n", 0);
+			
+				line_num++;
+			
+				log_fstr(getLogPath(), "(pid=%lu) line%i: %s", pid, line_num, buf);
+
+				int ret = fill_req(buf, &req);
+				if (ret == 0) 
+					// строка запроса обработана, переходим к следующей
+					continue;
+				if (ret == REQ_END ) 
+					// конец HTTP запроса, вываливаемся на обработку
+					break;
+				else
+					// какая-то ошибка 
+					printf("Error: %d\n", ret);
+			}
+			
+			log_fstr(getLogPath(), "\n---end of the request itself (pid=%lu):----\n", pid);
+	
+			log_fstr(getLogPath(), "\nParsed request (pid=%lu): request=%s, method=%s, uri=%s, uri_path=%s\n", pid, req.request, req.method, req.uri, req.uri_path);
+		
+			if(strstr(req.uri_path, "exit") != NULL)
+				break; //exit code for server
+	
+			do_resp_async(&req);
+		}
+	}
+	
+	while(1)
+	{
+		pthread_mutex_lock(&lock);
+		if(is_any_thread_in_list__unsafe() == 0)
+			break;
+		else
+			log_fstr(getLogPath(), "\nwaiting for threads\n", pid);
+			sleep(1);
+		pthread_mutex_unlock(&lock);
+	}
+	
+	pthread_mutex_destroy(&lock);
+	pthread_mutex_destroy(&lock_access_log);
+	
+	log_fstr(getLogPath(), " \nFINISH (pid=%lu)\n ", pid);
 }
