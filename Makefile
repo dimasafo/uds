@@ -14,7 +14,7 @@ all: $(TARGET)
 rebuild: clean myweb uninstall install
 
 myweb: myweb.c
-	cc $(CFLAGS) $^ -o $@
+	cc $(CFLAGS) $^ -o $@ -lpthread
 
 clean:
 	-rm -f $(TARGET) access.log
