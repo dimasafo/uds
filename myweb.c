@@ -39,14 +39,21 @@ char* getBasePath()
 
 pthread_mutex_t lock;
 pthread_mutex_t lock_access_log;
-pthread_t threads[MAX_THREADS];
+
+struct thread_info
+{
+	pthread_t thread_id;
+	int is_latest;
+};
+
+struct thread_info threads[MAX_THREADS];
 pthread_t fastFinishedThread;
 
 int get_thread_id_index__unsafe(pthread_t id)
 {
 	for(int i = 0; i < MAX_THREADS; ++i)
 	{
-		if(threads[i] == id)
+		if(threads[i].thread_id == id)
 			return i;
 	}
 	
@@ -62,9 +69,10 @@ int add_thread_to_list__unsafe(pthread_t id)
 		
 	for(int i = 0; i < MAX_THREADS; ++i)
 	{
-		if(threads[i] == 0)
+		if(threads[i].thread_id == 0)
 		{
-			threads[i] = id;
+			threads[i].thread_id = id;
+			threads[i].is_latest = 1;
 			return 1;
 		}
 	}
@@ -76,7 +84,7 @@ int is_any_thread_in_list__unsafe()
 {
 	for(int i = 0; i < MAX_THREADS; ++i)
 	{
-		if(threads[i] != 0)
+		if(threads[i].thread_id != 0)
 		{
 			return 1;
 		}
@@ -85,12 +93,13 @@ int is_any_thread_in_list__unsafe()
 	return 0;
 }
 
-void remove_thread_from_list__unsafe(pthread_t id)
+void reset_fast_finished_info__unsafe()
 {
-	int idx = get_thread_id_index__unsafe(id);
-	
-	if (idx != -1)
-		threads[idx] = 0;
+	for(int i = 0; i < MAX_THREADS; ++i)
+	{
+		threads[i].is_latest = 0;
+	}
+	fastFinishedThread = 0;
 }
 
 int log_fstr(const char* log_path, const char* format, ...);
@@ -357,8 +366,21 @@ void thread_cleanup_handler(void *arg)
 	pthread_t thread_id = pthread_self();
 	
 	pthread_mutex_lock(&lock);
-		remove_thread_from_list__unsafe(thread_id);
-		fastFinishedThread = thread_id;
+	
+		int idx = get_thread_id_index__unsafe(id);
+		int is_latest = 0;
+	
+		if (idx != -1)
+		{
+			threads[idx].thread_id = 0;
+			is_latest = threads[idx].is_latest;
+			threads[idx].is_latest = 0;
+		}
+	
+		if(is_latest == 1)
+		{
+			fastFinishedThread = thread_id;
+		}
 	pthread_mutex_unlock(&lock);
 }
 
@@ -413,7 +435,7 @@ void do_resp_async(struct http_req* req)
 	
 	{
 		pthread_mutex_lock(&lock);
-			fastFinishedThread = 0;
+			reset_fast_finished_info__unsafe();
 		pthread_mutex_unlock(&lock);
 	}
 	
@@ -436,7 +458,7 @@ void do_resp_async(struct http_req* req)
 	
 	{
 		pthread_mutex_lock(&lock);
-			fastFinishedThread = 0;
+			reset_fast_finished_info__unsafe();
 		pthread_mutex_unlock(&lock);
 	}
 	
